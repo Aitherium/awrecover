@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "awrecover"
+version = "0.1.0"
+description = "Labelled snapshots of a directory, with a restore that either fully lands or does not land at all — and a verify that proves restorability by restoring."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    # HARD, not optional. A snapshot IS an awshare bundle; a recovery tool that
+    # degrades to "archiving unavailable" produces records that look like
+    # backups and are not.
+    "awshare>=0.1.0",
+]
+
+[project.optional-dependencies]
+seal = ["awseal>=0.1.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+awrecover = "awrecover.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Aitherium/awrecover"
+Repository = "https://github.com/Aitherium/awrecover.git"
+
+[tool.setuptools]
+packages = ["awrecover"]
+license-files = ["LICENSE"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

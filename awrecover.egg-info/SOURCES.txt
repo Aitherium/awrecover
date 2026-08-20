@@ -1,0 +1,12 @@
+LICENSE
+README.md
+pyproject.toml
+awrecover/__init__.py
+awrecover/cli.py
+awrecover/store.py
+awrecover.egg-info/PKG-INFO
+awrecover.egg-info/SOURCES.txt
+awrecover.egg-info/dependency_links.txt
+awrecover.egg-info/entry_points.txt
+awrecover.egg-info/requires.txt
+awrecover.egg-info/top_level.txt
