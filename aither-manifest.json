@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1",
+  "name": "awrecover",
+  "description": "Labelled snapshots with an all-or-nothing restore.",
+  "url": "https://aitherium.github.io/awrecover/",
+  "repository": "https://github.com/Aitherium/awrecover",
+  "kind": "tool",
+  "status": "public",
+  "adopt": "Snapshot one directory, break it, restore it, diff it.",
+  "pairs_with": [
+    "awnix",
+    "awshare"
+  ],
+  "includes": []
+}
