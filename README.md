@@ -10,42 +10,109 @@
 
 <!-- aither-header:end -->
 
-Snapshot a directory, and get it back.
+Snapshot a directory, and get it back — with proof that you can.
 
 ```bash
 pip install awrecover
 
 awrecover snapshot ./run --store .snaps --label pre-finetune
-awrecover verify   --store .snaps --label pre-finetune      # RESTORES it
+awrecover verify   --store .snaps --label pre-finetune      # RESTORES it, to a scratch dir
 awrecover restore  --store .snaps --label pre-finetune --dest ./run
 ```
 
-Deliberately thin. A snapshot *is* an [`awshare`](https://github.com/Aitherium/awshare)
-bundle, so archiving, digesting, atomic writes and path containment are not
-reimplemented here. awrecover adds only what awshare does not have: a label
-index, and a restore that either fully lands or does not land at all.
+Python 3.10+. `awrecover` needs [`awshare`](https://github.com/Aitherium/awshare),
+which it installs with; add `pip install "awshare[seal]"` if you want snapshots
+signed as well as digested.
+
+## Deliberately thin
+
+A snapshot **is** an awshare bundle. Archiving, digesting, atomic writes, path
+containment, refusing symlinks and bounding expansion are all awshare's job and
+are not reimplemented here. awrecover adds exactly two things awshare has no
+opinion about:
+
+- **a label index**, so you say `pre-finetune` instead of remembering a digest
+- **a restore that fully lands or does not land at all**
+
+If you want a bundle, use awshare. You want awrecover when you will be coming
+back for it under a name, possibly in a hurry.
 
 ## Two rules it exists to enforce
 
-**A backup nobody has restored is a hypothesis.** `verify` restores into a
-scratch directory and compares. The cheap check — "the archive exists and is
-non-empty" — passes for a snapshot of the wrong directory, a truncated one, and
-one taken of nothing.
+### A backup nobody has restored is a hypothesis
 
-**A half-restore is worse than no restore.** It destroys the working state *and*
-fails to deliver the snapshot. So a restore stages beside the target, verifies,
-then swaps; the window where neither is in place is one rename wide. The tree it
-replaced is moved aside, not deleted — if the swap fails, the old state is still
-under a name you can find.
+`verify` does not check that the archive exists, or that it is a plausible size.
+Those pass for a snapshot **of the wrong directory**, a truncated one, and one
+taken of nothing at all. It restores into a scratch directory, through the same
+code path a real restore uses, and throws the result away.
 
-Exit 1 when a snapshot is checked and found unrestorable; exit 2 when it could
-not be checked at all.
+```bash
+awrecover verify --store .snaps --label pre-finetune
+# 0  restorable — this really came back
+# 1  checked, and it is NOT restorable
+# 2  could not check at all
+```
+
+Exit 1 and exit 2 stay separate for the reason they always must: collapsing them
+turns *"I could not check this"* into *"it checked out"*.
+
+There is a narrower version of the same trap inside `verify` itself. A label can
+be present in the index while its manifest is gone — so the index says the
+backup exists and the backup does not. That is reported as its own error, in
+those words: **the index is a claim; the archive is the backup.**
+
+### A half-restore is worse than no restore
+
+It destroys the working state *and* fails to deliver the snapshot. So `restore`
+never writes into the target:
+
+```
+1. unpack into a staging dir BESIDE dest      (a failure here changes nothing)
+2. verify the staged tree
+3. move dest aside     -> .awrecover-replaced-<label>-<pid>
+4. rename staging      -> dest
+```
+
+The window where neither tree is in place is **one rename wide**. And the tree
+it replaced is *moved aside, not deleted* — if the swap fails, your old state is
+still there under a name you can find. Pass `--discard-replaced` when you are
+sure and want the space back.
+
+If anything fails before step 3, the error says `Nothing was changed`, and it is
+telling the truth.
+
+## Everything it does
+
+| | |
+|---|---|
+| `awrecover snapshot DIR --store S --label L [--seal] [--key-path P]` | take one |
+| `awrecover list --store S` | label, when, digest, file count |
+| `awrecover verify --store S --label L [--key K]` | prove it restores |
+| `awrecover restore --store S --label L --dest D [--key K] [--discard-replaced]` | put it back |
+| `awrecover drop --store S --label L` | remove one — explicit, never implicit |
+| `awrecover doctor` | what is installed, and whether the store answers |
+
+```python
+import awrecover
+from pathlib import Path
+
+awrecover.snapshot(Path("run"), Path(".snaps"), "pre-finetune")
+awrecover.verify(Path(".snaps"), "pre-finetune")          # raises if it will not restore
+r = awrecover.restore(Path(".snaps"), "pre-finetune", Path("run"))
+r["replaced"]   # where your previous tree went
+
+awrecover.latest(Path(".snaps"))        # the most recent Snapshot, or None
+awrecover.list_snapshots(Path(".snaps"))
+```
+
+`--key` on `verify` and `restore` is passed through to awshare, so a snapshot
+can be required to come from a **known publisher** and not merely to be intact.
+Integrity and provenance are two questions; awshare answers the first and
+[`awseal`](https://github.com/Aitherium/awseal) the second.
 
 ## Licence
 
 Apache-2.0.
-
----
 
 <!-- aither-ecosystem:start GENERATED from the ecosystem registry. Edits here are overwritten; change the registry instead. -->
 
