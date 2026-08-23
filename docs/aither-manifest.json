@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1",
+  "name": "awrecover",
+  "description": "Labelled snapshots with an all-or-nothing restore.",
+  "url": "https://aitherium.github.io/awrecover/",
+  "repository": "https://github.com/Aitherium/awrecover",
+  "kind": "tool",
+  "status": "public",
+  "adopt": "Snapshot one directory, break it, restore it, diff it.",
+  "pairs_with": [
+    "awnix",
+    "awshare",
+    "AitherZero"
+  ],
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 12,
+      "as_of": "2026-08-22T18:47:19-07:00"
+    },
+    "tests": {
+      "value": 0,
+      "as_of": "2026-08-22T18:47:19-07:00"
+    }
+  }
+}
