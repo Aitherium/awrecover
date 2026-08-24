@@ -17,6 +17,7 @@ not be checked at all.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -169,6 +170,49 @@ def self_test() -> int:
     return 0 if ok else 1
 
 
+def _passphrase() -> str:
+    """Read the recovery passphrase WITHOUT it touching argv.
+
+    There is deliberately no --passphrase flag. A secret on a command line goes
+    into shell history and is readable in the process list by any other user on
+    the box for as long as the command runs -- and the one moment this command
+    is run is on a fresh machine someone else may also be on.
+    """
+    import getpass
+    pw = os.environ.get("AWRECOVER_PASSPHRASE")
+    if pw:
+        return pw
+    return getpass.getpass("recovery passphrase: ")
+
+
+def _cmd_push(a) -> int:
+    from .remote import push
+    snap = push(Path(a.store), a.label, a.remote, _passphrase(), message=a.message)
+    print(f"pushed {snap.label} ({snap.size} bytes, encrypted) -> {a.remote}")
+    return 0
+
+
+def _cmd_pull(a) -> int:
+    from .remote import pull
+    out = pull(a.remote, a.label, Path(a.store), _passphrase())
+    print(f"pulled {a.label} -> {out}")
+    print("decrypted OK. `awrecover restore` puts it back on disk.")
+    return 0
+
+
+def _cmd_remote_list(a) -> int:
+    from .remote import remote_list
+    labels = remote_list(a.remote)
+    if not labels:
+        # An empty remote is a real, reportable state -- not an error, and not
+        # something to print as though snapshots were found.
+        print("(remote holds no snapshots)")
+        return 0
+    for label in labels:
+        print(label)
+    return 0
+
+
 def main(argv=None) -> int:
     # GENERATED doctor intercept (gen_aw_doctor.py) -- do not edit
     _dv = locals().get("argv")
@@ -206,6 +250,24 @@ def main(argv=None) -> int:
     r.add_argument("--discard-replaced", action="store_true")
     r.set_defaults(fn=_cmd_restore)
 
+    ph = sub.add_parser("push", help="encrypt a snapshot and commit it to a git remote")
+    ph.add_argument("--store", required=True)
+    ph.add_argument("--label", required=True)
+    ph.add_argument("--remote", required=True,
+                    help="git URL you control (a private GitHub repo)")
+    ph.add_argument("--message")
+    ph.set_defaults(fn=_cmd_push)
+
+    pl = sub.add_parser("pull", help="fetch and decrypt a snapshot from a git remote")
+    pl.add_argument("--store", required=True)
+    pl.add_argument("--label", required=True)
+    pl.add_argument("--remote", required=True)
+    pl.set_defaults(fn=_cmd_pull)
+
+    rl = sub.add_parser("remote-list", help="labels present in a git remote")
+    rl.add_argument("--remote", required=True)
+    rl.set_defaults(fn=_cmd_remote_list)
+
     dp = sub.add_parser("drop")
     dp.add_argument("--store", required=True)
     dp.add_argument("--label", required=True)
@@ -213,7 +275,13 @@ def main(argv=None) -> int:
 
     a = ap.parse_args(argv)
     if a.self_test:
-        return self_test()
+        rc = self_test()
+        # The remote half has its own arms (encryption, authenticity, refusal).
+        # Folding them in here means one --self-test covers the whole package;
+        # a second entry point nobody runs is how a gate goes quietly dead.
+        from .remote import selftest as _remote_selftest
+        rc2 = _remote_selftest()
+        return rc or rc2
     if not getattr(a, "fn", None):
         ap.print_help()
         return 2
