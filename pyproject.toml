@@ -14,15 +14,15 @@ dependencies = [
     # degrades to "archiving unavailable" produces records that look like
     # backups and are not.
     "awshare>=0.1.0",
+    # Same rule: remote.py's AES-GCM sealing imports this at call time, and on
+    # a clean install its absence surfaced as selftest exit 2 ("cannot run")
+    # -- an encrypting tool that cannot encrypt, caught live by mirror CI on a
+    # GitHub-hosted runner where nothing ambient masked the hole.
+    "cryptography>=41",
 ]
 
 [project.optional-dependencies]
 seal = ["awseal>=0.1.0"]
-# `remote` is opt-in, and the code REFUSES rather than degrading without it:
-# a push that silently fell back to plaintext would put a workspace -- users,
-# knowledge, secrets -- on a git host in the clear, which is worse than having
-# no remote at all. See the module docstring in awrecover/remote.py.
-remote = ["cryptography>=41.0"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
