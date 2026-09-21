@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrecover"
-version = "0.1.0"
+version = "0.1.1"
 description = "Labelled snapshots of a directory, with a restore that either fully lands or does not land at all — and a verify that proves restorability by restoring."
 readme = "README.md"
 requires-python = ">=3.10"
