@@ -56,3 +56,16 @@ def test_seal_and_incremental_are_refused_together(tmp_path):
     work = _work(tmp_path / "w")
     with pytest.raises(RecoverError):
         snapshot(work, tmp_path / "store", "s1", incremental=True, seal=True)
+
+
+def test_history_marks_where_a_file_changed_and_find_globs(tmp_path):
+    from awrecover.store import find, history
+    work, store = _work(tmp_path / "w"), tmp_path / "store"
+    snapshot(work, store, "s1", incremental=True)
+    snapshot(work, store, "s2", incremental=True)
+    (work / "today.jsonl").write_bytes(b"new")
+    snapshot(work, store, "s3", incremental=True)
+    h = history(store, "today.jsonl")
+    assert [(r["label"], r["changed"]) for r in h] == [("s1", True), ("s2", False), ("s3", True)]
+    assert history(store, "nope.txt") == []
+    assert {r["label"] for r in find(store, "data/*.jsonl")} == {"s1", "s2", "s3"}

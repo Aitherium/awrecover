@@ -36,6 +36,8 @@ from .store import (
     RestoreFailedError,
     Snapshot,
     drop,
+    find,
+    history,
     latest,
     list_snapshots,
     load_index,
@@ -44,7 +46,7 @@ from .store import (
     verify,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "INDEX_VERSION",
@@ -52,6 +54,8 @@ __all__ = [
     "RestoreFailedError",
     "Snapshot",
     "drop",
+    "find",
+    "history",
     "latest",
     "list_snapshots",
     "load_index",

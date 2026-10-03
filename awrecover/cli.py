@@ -25,6 +25,8 @@ from .store import (
     RecoverError,
     RestoreFailedError,
     drop,
+    find,
+    history,
     list_snapshots,
     restore,
     snapshot,
@@ -44,6 +46,24 @@ def _cmd_snapshot(a) -> int:
     print("NOTE: taken, not proven. Run `awrecover verify --label "
           f"{s.label}` — a backup nobody has restored is a hypothesis.")
     return 0
+
+
+def _cmd_history(a) -> int:
+    rows = history(Path(a.store), a.path)
+    if not rows:
+        print(f"{a.path}: in no incremental snapshot in {a.store}")
+        return 1
+    for r in rows:
+        mark = "changed" if r["changed"] else "same"
+        print(f"{r['label']:<24} {r['created'][:19]}  {r['size']:>12}  {r['sha256'][:12]}  {mark}")
+    return 0
+
+
+def _cmd_find(a) -> int:
+    rows = find(Path(a.store), a.pattern)
+    for r in rows:
+        print(f"{r['label']:<24} {r['path']}  ({r['size']} bytes)")
+    return 0 if rows else 1
 
 
 def _cmd_list(a) -> int:
@@ -236,6 +256,16 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--self-test", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
+
+    hi = sub.add_parser("history", help="when a file changed across incremental snapshots")
+    hi.add_argument("path")
+    hi.add_argument("--store", required=True)
+    hi.set_defaults(fn=_cmd_history)
+
+    fd = sub.add_parser("find", help="glob a path across incremental snapshots")
+    fd.add_argument("pattern")
+    fd.add_argument("--store", required=True)
+    fd.set_defaults(fn=_cmd_find)
 
     s = sub.add_parser("snapshot")
     s.add_argument("directory")

@@ -300,3 +300,42 @@ def drop(store: Path, label: str) -> None:
 def latest(store: Path) -> Optional[Snapshot]:
     snaps = list_snapshots(store)
     return snaps[0] if snaps else None
+
+
+def history(store: Path, path: str) -> List[Dict[str, Any]]:
+    """Every incremental snapshot holding `path`, oldest first, marking where it changed.
+
+    Answers "when did this file change, and which snapshot has the version I want"
+    from the manifests alone -- nothing is restored to find out."""
+    _require_awshare()
+    rows: List[Dict[str, Any]] = []
+    prev = None
+    for s in sorted((s for s in load_index(store).values() if _is_tree(s)),
+                    key=lambda s: s.created):
+        mp = _tree_manifest_path(store, s.label)
+        if not mp.is_file():
+            continue
+        ent = (awshare.load_tree_manifest(mp).get("files") or {}).get(path)
+        if ent is None:
+            continue
+        rows.append({"label": s.label, "created": s.created, "sha256": ent["sha256"],
+                     "size": ent["size"], "changed": ent["sha256"] != prev})
+        prev = ent["sha256"]
+    return rows
+
+
+def find(store: Path, pattern: str) -> List[Dict[str, Any]]:
+    """Paths matching the glob `pattern` across every incremental snapshot."""
+    import fnmatch
+    _require_awshare()
+    out: List[Dict[str, Any]] = []
+    for s in sorted((s for s in load_index(store).values() if _is_tree(s)),
+                    key=lambda s: s.created):
+        mp = _tree_manifest_path(store, s.label)
+        if not mp.is_file():
+            continue
+        for rel, ent in sorted((awshare.load_tree_manifest(mp).get("files") or {}).items()):
+            if fnmatch.fnmatch(rel, pattern):
+                out.append({"label": s.label, "path": rel, "size": ent["size"],
+                            "sha256": ent["sha256"]})
+    return out
