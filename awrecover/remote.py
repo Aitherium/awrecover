@@ -98,6 +98,11 @@ SNAP_NAME = "snapshot.json"
 #: the account.
 REMOTE_DIR = "snapshots"
 
+#: Incremental (tree) snapshots: which object lives in which pushed pack. It is
+#: ENCRYPTED like everything else -- a plaintext list of content digests lets anyone
+#: holding the repo confirm whether a known file is in the backup.
+LEDGER_NAME = "objects.ledger" + ENC_SUFFIX
+
 
 class RemoteError(RecoverError):
     """A remote push or pull failed."""
@@ -293,10 +298,144 @@ def _unpack(plaintext: bytes, dest_store: Path, label: str) -> None:
             os.replace(tmp, out)
 
 
+def _is_tree_label(store: Path, label: str) -> bool:
+    from .store import KIND_KEY, load_index
+    snap = load_index(store).get(label)
+    return bool(snap and (snap.meta or {}).get(KIND_KEY) == "tree")
+
+
+def _read_ledger(work: Path, passphrase: str) -> dict:
+    import json
+    lp = work / REMOTE_DIR / LEDGER_NAME
+    if not lp.is_file():
+        return {}
+    return json.loads(decrypt(lp.read_bytes(), passphrase).decode("utf-8"))
+
+
+def _pack_tree(store: Path, label: str, skip: set) -> tuple:
+    """manifest + index row + every object the remote does not hold yet."""
+    import io
+    import json
+    import tarfile
+
+    import awshare
+
+    from .store import load_index
+
+    row = json.dumps(load_index(store)[label].to_dict(), indent=2).encode("utf-8")
+    mpath = store / f"{label}{awshare.TREE_MANIFEST_SUFFIX}"
+    tm = awshare.load_tree_manifest(mpath)
+    objs = awshare.ObjectStore(store)
+    new = sorted({str(e["sha256"]) for e in tm["files"].values()} - skip)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        tf.add(mpath, arcname=mpath.name)
+        ti = tarfile.TarInfo(SNAP_NAME)
+        ti.size = len(row)
+        tf.addfile(ti, io.BytesIO(row))
+        for d in new:
+            tf.add(objs.path(d), arcname=f"objects/{d}")
+    return buf.getvalue(), new
+
+
+def _push_tree(store: Path, label: str, remote: str, passphrase: str,
+               message: Optional[str]) -> RemoteSnapshot:
+    """Push only the objects the remote lacks; the ledger says where each lives."""
+    import json
+    with tempfile.TemporaryDirectory() as td:
+        work = _clone(remote, Path(td))
+        dest_dir = work / REMOTE_DIR
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        ledger = _read_ledger(work, passphrase)
+        plaintext, new = _pack_tree(store, label, set(ledger))
+        blob = seal_roundtrip(plaintext, passphrase)
+        dest = dest_dir / f"{label}{ENC_SUFFIX}"
+        dest.write_bytes(blob)
+        for d in new:
+            ledger[d] = label
+        lblob = seal_roundtrip(json.dumps(ledger, sort_keys=True).encode("utf-8"), passphrase)
+        (dest_dir / LEDGER_NAME).write_bytes(lblob)
+        for f in (dest, dest_dir / LEDGER_NAME):
+            if not is_encrypted(f.read_bytes()):  # pragma: no cover - defensive
+                raise NotEncryptedError(f"refusing to commit: {f.name} carries no envelope")
+        _git(["add", "--", f"{REMOTE_DIR}/{label}{ENC_SUFFIX}",
+              f"{REMOTE_DIR}/{LEDGER_NAME}"], work)
+        if _git(["status", "--porcelain"], work).strip():
+            _git(["-c", "user.email=awrecover@aitherium.com", "-c", "user.name=awrecover",
+                  "commit", "-m", message or f"awrecover: incremental snapshot {label} "
+                                             f"({len(new)} new object(s))"], work)
+            _git(["push"], work)
+    return RemoteSnapshot(label=label, size=len(blob))
+
+
+def _pull_tree(work: Path, label: str, dest_store: Path, passphrase: str) -> None:
+    """Unpack `label`'s manifest + row, then every pack holding an object it needs."""
+    import io
+    import json
+    import tarfile
+
+    import awshare
+
+    from .store import Snapshot, load_index, save_index
+
+    ledger = _read_ledger(work, passphrase)
+    objs = awshare.ObjectStore(dest_store)
+
+    def unpack(pack_label: str, want: Optional[set]) -> tuple:
+        src = work / REMOTE_DIR / f"{pack_label}{ENC_SUFFIX}"
+        if not src.is_file():
+            raise RemoteError(f"remote ledger names pack {pack_label!r} but it is missing")
+        manifest_bytes = row = None
+        with tarfile.open(fileobj=io.BytesIO(decrypt(src.read_bytes(), passphrase)),
+                          mode="r:gz") as tf:
+            for m in tf.getmembers():
+                if not m.isfile():
+                    continue
+                name = m.name
+                if name.startswith("objects/"):
+                    d = name[len("objects/"):]
+                    if want is not None and d not in want:
+                        continue
+                    target = objs.path(d)  # validates the digest shape
+                    if target.is_file():
+                        continue
+                    data = tf.extractfile(m).read()
+                    if awshare.digest_bytes(data) != d:
+                        raise RemoteError(f"object {d[:16]}... in pack {pack_label!r} is corrupt")
+                    awshare.atomic_write(target, data)
+                elif name == SNAP_NAME:
+                    row = tf.extractfile(m).read()
+                elif name.endswith(awshare.TREE_MANIFEST_SUFFIX) and "/" not in name:
+                    manifest_bytes = tf.extractfile(m).read()
+        return manifest_bytes, row
+
+    manifest_bytes, row = unpack(label, None)
+    if manifest_bytes is None or row is None:
+        raise RemoteError(f"pack {label!r} carries no tree manifest or index row")
+    awshare.atomic_write(dest_store / f"{label}{awshare.TREE_MANIFEST_SUFFIX}", manifest_bytes)
+    tm = json.loads(manifest_bytes.decode("utf-8"))
+    need = {str(e["sha256"]) for e in tm["files"].values()}
+    missing = {d for d in need if not objs.has(d)}
+    for pack_label in sorted({ledger.get(d) for d in missing} - {None}):
+        unpack(pack_label, missing)
+    still = sorted(d for d in need if not objs.has(d))
+    if still:
+        raise RemoteError(f"{len(still)} object(s) of {label!r} are in no pushed pack "
+                          f"(first {still[0][:16]}...); the remote cannot restore it")
+    snaps = load_index(dest_store)
+    snaps[label] = Snapshot(**json.loads(row.decode("utf-8")))
+    save_index(dest_store, snaps)
+
+
 def push(store: Path, label: str, remote: str, passphrase: str,
          *, message: Optional[str] = None) -> RemoteSnapshot:
-    """Encrypt snapshot `label` from `store` and commit it to `remote`."""
+    """Encrypt snapshot `label` from `store` and commit it to `remote`.
+
+    An incremental (tree) snapshot pushes only the objects the remote does not
+    already hold; a pull fetches exactly the packs its files live in."""
     store = Path(store)
+    if _is_tree_label(store, label):
+        return _push_tree(store, label, remote, passphrase, message)
     archive = store / f"{label}{ARCHIVE_SUFFIX}"
     manifest = store / f"{label}{MANIFEST_SUFFIX}"
     if not archive.is_file():
@@ -357,6 +496,16 @@ def pull(remote: str, label: str, dest_store: Path, passphrase: str) -> Path:
                 f"remote has no snapshot {label!r}. It holds: "
                 f"{', '.join(have) if have else '(none)'}"
             )
+        if (work / REMOTE_DIR / LEDGER_NAME).is_file():
+            plaintext = decrypt(src.read_bytes(), passphrase)
+            import io
+            import tarfile
+            with tarfile.open(fileobj=io.BytesIO(plaintext), mode="r:gz") as tf:
+                is_tree = any(n.startswith("objects/") or n.endswith(".awtree.json")
+                              for n in tf.getnames())
+            if is_tree:
+                _pull_tree(work, label, dest_store, passphrase)
+                return dest_store / f"{label}.awtree.json"
         plaintext = decrypt(src.read_bytes(), passphrase)
         _unpack(plaintext, dest_store, label)
     return dest_store / f"{label}{ARCHIVE_SUFFIX}"
@@ -369,7 +518,8 @@ def remote_list(remote: str) -> List[str]:
         d = work / REMOTE_DIR
         if not d.is_dir():
             return []
-        return sorted(p.name[: -len(ENC_SUFFIX)] for p in d.glob(f"*{ENC_SUFFIX}"))
+        return sorted(p.name[: -len(ENC_SUFFIX)] for p in d.glob(f"*{ENC_SUFFIX}")
+                      if p.name != LEDGER_NAME)
 
 
 def selftest() -> int:

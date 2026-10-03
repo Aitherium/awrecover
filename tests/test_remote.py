@@ -125,3 +125,51 @@ def test_unpack_refuses_a_path_traversing_member(tmp_path):
         tf.addfile(ti, io.BytesIO(data))
     with pytest.raises(rremote.RemoteError):
         rremote._unpack(buf.getvalue(), tmp_path / "s", "ws")
+
+
+# ----------------------------------------------------------------------------- incremental
+def _members(blob_path, pw):
+    import io
+    import tarfile
+    plain = rremote.decrypt(blob_path.read_bytes(), pw)
+    with tarfile.open(fileobj=io.BytesIO(plain), mode="r:gz") as tf:
+        return tf.getnames()
+
+
+def test_incremental_push_sends_only_new_objects(tmp_path, workspace, bare_remote):
+    store = tmp_path / "snaps"
+    rstore.snapshot(workspace, store, "s1", incremental=True)
+    rremote.push(store, "s1", str(bare_remote), PW)
+    (workspace / "users.json").write_text('{"users":["jason","patty"]}', encoding="utf-8")
+    rstore.snapshot(workspace, store, "s2", incremental=True)
+    rremote.push(store, "s2", str(bare_remote), PW)
+
+    chk = tmp_path / "chk"
+    _git(["git", "clone", str(bare_remote), str(chk)], tmp_path)
+    objs1 = [n for n in _members(chk / "snapshots" / "s1.awrecover.enc", PW)
+             if n.startswith("objects/")]
+    objs2 = [n for n in _members(chk / "snapshots" / "s2.awrecover.enc", PW)
+             if n.startswith("objects/")]
+    assert len(objs1) == 3 and len(objs2) == 1  # only the changed users.json
+    for f in chk.rglob("*"):
+        if f.is_file() and ".git" not in f.parts:
+            assert SECRET.encode() not in f.read_bytes(), f"secret leaked in {f.name}"
+    assert rremote.remote_list(str(bare_remote)) == ["s1", "s2"]
+
+
+def test_fresh_machine_restores_an_incremental_snapshot_across_packs(tmp_path, workspace,
+                                                                   bare_remote):
+    store = tmp_path / "snaps"
+    rstore.snapshot(workspace, store, "s1", incremental=True)
+    rremote.push(store, "s1", str(bare_remote), PW)
+    (workspace / "users.json").write_text('{"users":["patty"]}', encoding="utf-8")
+    rstore.snapshot(workspace, store, "s2", incremental=True)
+    rremote.push(store, "s2", str(bare_remote), PW)
+
+    fresh = tmp_path / "fresh"
+    rremote.pull(str(bare_remote), "s2", fresh, PW)
+    dest = tmp_path / "restored"
+    rstore.restore(fresh, "s2", dest)
+    assert (dest / "users.json").read_text(encoding="utf-8") == '{"users":["patty"]}'
+    assert (dest / "secrets" / "vault.env").read_text(encoding="utf-8").strip() == \
+        f"API_KEY={SECRET}"
