@@ -1,6 +1,6 @@
 """`awrecover` — snapshot a directory, and get it back.
 
-    awrecover snapshot <dir> --store <dir> --label pre-finetune [--seal]
+    awrecover snapshot <dir> --store <dir> --label pre-finetune [--seal | --incremental]
     awrecover list --store <dir>
     awrecover verify --store <dir> --label pre-finetune
     awrecover restore --store <dir> --label pre-finetune --dest <dir>
@@ -34,8 +34,12 @@ from .store import (
 
 def _cmd_snapshot(a) -> int:
     s = snapshot(Path(a.directory), Path(a.store), a.label, seal=a.seal,
-                 key_path=Path(a.key_path) if a.key_path else None)
+                 key_path=Path(a.key_path) if a.key_path else None,
+                 incremental=a.incremental)
     print(f"snapshot {s.label}: {s.files} file(s) from {s.subject}")
+    if a.incremental:
+        print(f"stored {s.meta.get('new_bytes', 0) / 1024 ** 2:.1f} MiB new of "
+              f"{s.meta.get('total_bytes', 0) / 1024 ** 2:.1f} MiB (unchanged files shared)")
     print(f"digest: {s.digest}")
     print("NOTE: taken, not proven. Run `awrecover verify --label "
           f"{s.label}` — a backup nobody has restored is a hypothesis.")
@@ -238,6 +242,8 @@ def main(argv=None) -> int:
     s.add_argument("--store", required=True)
     s.add_argument("--label", required=True)
     s.add_argument("--seal", action="store_true")
+    s.add_argument("--incremental", action="store_true",
+                   help="store in the shared object store: only changed files take space")
     s.add_argument("--key-path")
     s.set_defaults(fn=_cmd_snapshot)
 
