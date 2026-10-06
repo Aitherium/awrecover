@@ -1,0 +1,31 @@
+# awrecover
+
+> Labelled snapshots with an all-or-nothing restore.
+
+A restore that half-succeeds is worse than one that fails, because you now have a state that never existed.
+
+## Install
+
+```
+pip install awrecover
+```
+
+## Use it in 30 seconds
+
+Snapshot one directory, break it, restore it, diff it.
+
+## Composes with
+
+- [awnix](https://aitherium.github.io/awnix/) — A Linux you can hand to an agent — immutable base, capabilities included.
+- [awshare](https://aitherium.github.io/awshare/) — Publish an artifact and fetch it back verified.
+- [AitherZero](https://aitherium.github.io/AitherZero/) — PowerShell 7+ automation framework — numbered, self-describing scripts.
+
+## Where it lives
+
+- Repo: https://github.com/Aitherium/awrecover
+- Docs: https://aitherium.github.io/awrecover/
+- Manifest (keys + the one-line adoption story): https://aitherium.github.io/awrecover/aither-manifest.json
+
+This repository is mirrored from the AitherOS monorepo by `.github/workflows/sync-awrecover.yml`; hand edits made here are overwritten on the next sync — change the source instead.
+
+Everything Aitherium, in one file for agents: https://aitherium.com/llms.txt
