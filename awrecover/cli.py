@@ -34,12 +34,38 @@ from .store import (
 )
 
 
+def _object_store(a):
+    """`--objects strata:<tier>` -> a pooled object store, or None for local."""
+    spec = getattr(a, "objects", None)
+    if not spec:
+        return None
+    try:
+        from awstorage.strata import (  # optional sibling, only for --objects
+            StrataUnavailableError,
+            parse_spec,
+            strata_object_store,
+        )
+    except ImportError as exc:
+        raise RecoverError(f"--objects {spec} needs the `awstorage` package") from exc
+    try:
+        tier = parse_spec(spec)
+        if tier is None:
+            raise ValueError(f"--objects {spec!r}: only strata:<tier> is understood")
+        return strata_object_store(getattr(a, "tenant", None), tier)
+    except (StrataUnavailableError, ValueError) as exc:
+        raise RecoverError(f"--objects {spec}: {exc}") from exc
+
+
 def _cmd_snapshot(a) -> int:
+    objs = _object_store(a)
     s = snapshot(Path(a.directory), Path(a.store), a.label, seal=a.seal,
                  key_path=Path(a.key_path) if a.key_path else None,
-                 incremental=a.incremental)
+                 incremental=a.incremental or objs is not None, object_store=objs)
     print(f"snapshot {s.label}: {s.files} file(s) from {s.subject}")
-    if a.incremental:
+    if s.meta.get("awrecover.objects"):
+        print(f"objects: {s.meta['awrecover.objects']} "
+              f"({s.meta.get('new_objects', 0)} new)")
+    if a.incremental or objs is not None:
         print(f"stored {s.meta.get('new_bytes', 0) / 1024 ** 2:.1f} MiB new of "
               f"{s.meta.get('total_bytes', 0) / 1024 ** 2:.1f} MiB (unchanged files shared)")
     print(f"digest: {s.digest}")
@@ -77,7 +103,7 @@ def _cmd_list(a) -> int:
 
 
 def _cmd_verify(a) -> int:
-    r = verify(Path(a.store), a.label, expect_key=a.key)
+    r = verify(Path(a.store), a.label, expect_key=a.key, object_store=_object_store(a))
     print(f"{a.label}: restorable={r['restorable']} files={r['files']} "
           f"sealed={r['sealed']}")
     if r["seal"]:
@@ -89,7 +115,7 @@ def _cmd_verify(a) -> int:
 
 def _cmd_restore(a) -> int:
     r = restore(Path(a.store), a.label, Path(a.dest), expect_key=a.key,
-                keep_replaced=not a.discard_replaced)
+                keep_replaced=not a.discard_replaced, object_store=_object_store(a))
     print(f"restored {r['label']} -> {r['restored']} ({r['files']} file(s))")
     if r["replaced"]:
         print(f"previous tree moved aside: {r['replaced']}")
@@ -237,6 +263,13 @@ def _cmd_remote_list(a) -> int:
     return 0
 
 
+def _objects_args(p) -> None:
+    p.add_argument("--objects", metavar="strata:<tier>",
+                   help="keep the snapshot's objects in the Strata pool (implies "
+                        "--incremental); needs awstorage and a Strata credential")
+    p.add_argument("--tenant", help="the pool tenant (default AWSTORAGE_STRATA_TENANT)")
+
+
 def main(argv=None) -> int:
     # GENERATED doctor intercept (gen_aw_doctor.py) -- do not edit
     _dv = locals().get("argv")
@@ -275,6 +308,7 @@ def main(argv=None) -> int:
     s.add_argument("--incremental", action="store_true",
                    help="store in the shared object store: only changed files take space")
     s.add_argument("--key-path")
+    _objects_args(s)
     s.set_defaults(fn=_cmd_snapshot)
 
     ls = sub.add_parser("list")
@@ -285,6 +319,7 @@ def main(argv=None) -> int:
     v.add_argument("--store", required=True)
     v.add_argument("--label", required=True)
     v.add_argument("--key")
+    _objects_args(v)
     v.set_defaults(fn=_cmd_verify)
 
     r = sub.add_parser("restore")
@@ -293,6 +328,7 @@ def main(argv=None) -> int:
     r.add_argument("--dest", required=True)
     r.add_argument("--key")
     r.add_argument("--discard-replaced", action="store_true")
+    _objects_args(r)
     r.set_defaults(fn=_cmd_restore)
 
     ph = sub.add_parser("push", help="encrypt a snapshot and commit it to a git remote")
@@ -337,6 +373,9 @@ def main(argv=None) -> int:
         return 1
     except RecoverError as exc:
         print(f"COULD NOT RUN: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError) as exc:  # the object store's transport
+        print(f"COULD NOT RUN: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrecover"
-version = "0.2.2"
+version = "0.3.0"
 description = "Labelled snapshots of a directory, with a restore that either fully lands or does not land at all — and a verify that proves restorability by restoring."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ dependencies = [
     # HARD, not optional. A snapshot IS an awshare bundle; a recovery tool that
     # degrades to "archiving unavailable" produces records that look like
     # backups and are not.
-    "awshare>=0.2.0",
+    "awshare>=0.2.3",
     # Same rule: remote.py's AES-GCM sealing imports this at call time, and on
     # a clean install its absence surfaced as selftest exit 2 ("cannot run")
     # -- an encrypting tool that cannot encrypt, caught live by mirror CI on a
@@ -22,7 +22,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-seal = ["awseal>=0.1.0"]
+seal = ["awseal>=0.1.2"]
+pool = ["awstorage>=0.5.4"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

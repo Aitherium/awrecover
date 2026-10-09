@@ -52,10 +52,21 @@ def test_drop_keeps_objects_another_snapshot_needs(tmp_path):
     assert verify(store, "s2")["restorable"] is True
 
 
-def test_seal_and_incremental_are_refused_together(tmp_path):
+def test_seal_and_incremental_together_sign_the_tree_manifest(tmp_path):
+    awseal = pytest.importorskip("awseal")
     work = _work(tmp_path / "w")
+    key = awseal.keygen(tmp_path / "k" / "signer.key")
+    snap = snapshot(work, tmp_path / "store", "s1", incremental=True, seal=True,
+                    key_path=key)
+    assert (tmp_path / "store" / "s1.awtree.seal.json").is_file()
+    assert snap.meta["awrecover.seal_sha256"]
+    r = verify(tmp_path / "store", "s1", expect_key=awseal.public_key_hex(path=key))
+    assert r["sealed"] is True and r["seal"]["signature_ok"] is True
+
+
+def test_an_object_store_without_incremental_is_refused(tmp_path):
     with pytest.raises(RecoverError):
-        snapshot(work, tmp_path / "store", "s1", incremental=True, seal=True)
+        snapshot(_work(tmp_path / "w"), tmp_path / "store", "s1", object_store=object())
 
 
 def test_history_marks_where_a_file_changed_and_find_globs(tmp_path):
