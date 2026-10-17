@@ -173,3 +173,32 @@ def test_fresh_machine_restores_an_incremental_snapshot_across_packs(tmp_path, w
     assert (dest / "users.json").read_text(encoding="utf-8") == '{"users":["patty"]}'
     assert (dest / "secrets" / "vault.env").read_text(encoding="utf-8").strip() == \
         f"API_KEY={SECRET}"
+
+
+def test_a_sealed_incremental_snapshot_restores_from_the_remote(tmp_path, workspace,
+                                                               bare_remote):
+    """The seal travels in the pack: a pulled sealed tree verifies against the signer's key.
+
+    Before 2026-10-16 the pack carried the manifest and the index row but not the seal,
+    while the row records the seal's digest -- so every sealed push restored nothing
+    ("was sealed and its seal is missing").
+    """
+    awseal = pytest.importorskip("awseal")
+    key = tmp_path / "signer.pem"
+    awseal.keygen(key)
+    pub = awseal.public_key_hex(path=key)
+    store = tmp_path / "snaps"
+    rstore.snapshot(workspace, store, "s1", incremental=True, seal=True, key_path=key)
+    rremote.push(store, "s1", str(bare_remote), PW)
+
+    fresh = tmp_path / "fresh"
+    rremote.pull(str(bare_remote), "s1", fresh, PW)
+    assert rstore.verify(fresh, "s1", expect_key=pub)["sealed"] is True
+    dest = tmp_path / "restored"
+    rstore.restore(fresh, "s1", dest, expect_key=pub)
+    assert (dest / "users.json").read_text(encoding="utf-8") == '{"users":["jason"]}'
+    other = tmp_path / "other.pem"
+    awseal.keygen(other)
+    with pytest.raises(rstore.RecoverError):
+        rstore.restore(fresh, "s1", tmp_path / "nope",
+                       expect_key=awseal.public_key_hex(path=other))

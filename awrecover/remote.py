@@ -60,7 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from .store import RecoverError
+from .store import TREE_SEAL_SUFFIX, RecoverError
 
 #: Envelope magic. Version is IN the magic so a future format change cannot be
 #: silently misread as this one -- a decryptor that guesses at layout produces
@@ -330,6 +330,12 @@ def _pack_tree(store: Path, label: str, skip: set) -> tuple:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         tf.add(mpath, arcname=mpath.name)
+        # A SEALED tree's seal travels with it: the index row records the seal's digest,
+        # so a pull without the seal file restores nothing ("sealed and its seal is
+        # missing") -- measured 2026-10-16 on the first sealed push.
+        spath = store / f"{label}{TREE_SEAL_SUFFIX}"
+        if spath.is_file():
+            tf.add(spath, arcname=spath.name)
         ti = tarfile.TarInfo(SNAP_NAME)
         ti.size = len(row)
         tf.addfile(ti, io.BytesIO(row))
@@ -385,7 +391,7 @@ def _pull_tree(work: Path, label: str, dest_store: Path, passphrase: str) -> Non
         src = work / REMOTE_DIR / f"{pack_label}{ENC_SUFFIX}"
         if not src.is_file():
             raise RemoteError(f"remote ledger names pack {pack_label!r} but it is missing")
-        manifest_bytes = row = None
+        manifest_bytes = row = seal = None
         with tarfile.open(fileobj=io.BytesIO(decrypt(src.read_bytes(), passphrase)),
                           mode="r:gz") as tf:
             for m in tf.getmembers():
@@ -405,14 +411,19 @@ def _pull_tree(work: Path, label: str, dest_store: Path, passphrase: str) -> Non
                     awshare.atomic_write(target, data)
                 elif name == SNAP_NAME:
                     row = tf.extractfile(m).read()
+                elif name == f"{pack_label}{TREE_SEAL_SUFFIX}":
+                    seal = tf.extractfile(m).read()
                 elif name.endswith(awshare.TREE_MANIFEST_SUFFIX) and "/" not in name:
                     manifest_bytes = tf.extractfile(m).read()
-        return manifest_bytes, row
+        return manifest_bytes, row, seal
 
-    manifest_bytes, row = unpack(label, None)
+    manifest_bytes, row, seal = unpack(label, None)
     if manifest_bytes is None or row is None:
         raise RemoteError(f"pack {label!r} carries no tree manifest or index row")
     awshare.atomic_write(dest_store / f"{label}{awshare.TREE_MANIFEST_SUFFIX}", manifest_bytes)
+    if seal is not None:
+        # Judged on restore/verify (digest in the row + signature), never trusted here.
+        awshare.atomic_write(dest_store / f"{label}{TREE_SEAL_SUFFIX}", seal)
     tm = json.loads(manifest_bytes.decode("utf-8"))
     need = {str(e["sha256"]) for e in tm["files"].values()}
     missing = {d for d in need if not objs.has(d)}
