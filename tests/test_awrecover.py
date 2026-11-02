@@ -680,3 +680,31 @@ class TestMetadata:
         snap = awrecover.snapshot(source, store, "no-meta")
 
         assert snap.meta == {}
+
+
+class TestStaleVerifySweep:
+    """A verify killed mid-restore leaks its scratch; the next run removes it."""
+
+    def test_sweep_removes_old_and_keeps_fresh(self, tmp_path: Path) -> None:
+        import os
+        import time
+
+        from awrecover.store import VERIFY_PREFIX, sweep_stale_verify_dirs
+
+        old = tmp_path / f"{VERIFY_PREFIX}evals-old"
+        (old / "deep").mkdir(parents=True)
+        (old / "deep" / "big.bin").write_bytes(b"x" * 1024)
+        past = time.time() - 7 * 3600
+        os.utime(old, (past, past))
+        fresh = tmp_path / f"{VERIFY_PREFIX}evals-running"
+        fresh.mkdir()
+        other = tmp_path / "unrelated-dir"
+        other.mkdir()
+        os.utime(other, (past, past))
+
+        removed = sweep_stale_verify_dirs(tmp_path)
+
+        assert removed == [old]
+        assert not old.exists()
+        assert fresh.exists()
+        assert other.exists()

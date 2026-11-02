@@ -342,6 +342,38 @@ def list_snapshots(store: Path) -> List[Snapshot]:
     return sorted(load_index(store).values(), key=lambda s: s.created, reverse=True)
 
 
+VERIFY_PREFIX = ".awrecover-verify-"
+STALE_VERIFY_AGE_S = 6 * 3600
+
+
+def sweep_stale_verify_dirs(root: Optional[Path] = None,
+                            max_age_s: float = STALE_VERIFY_AGE_S) -> List[Path]:
+    """Delete verify scratch dirs a KILLED run left behind; return what was removed.
+
+    verify() cleans its scratch in a `finally`, which never runs when the process is
+    killed mid-restore (a wake timeout). Each killed run then leaked a full restored
+    copy into the temp dir: two leaks of a Training/evals snapshot (10 GB) filled C:
+    to 0 bytes on 2026-11-02. Only dirs older than `max_age_s` go, so a verify still
+    running in another process keeps its scratch.
+    """
+    import time
+    root = Path(root) if root is not None else Path(tempfile.gettempdir())
+    cutoff = time.time() - max_age_s
+    removed: List[Path] = []
+    try:
+        candidates = list(root.glob(f"{VERIFY_PREFIX}*"))
+    except OSError:
+        return removed
+    for d in candidates:
+        try:
+            if d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d)
+                removed.append(d)
+        except OSError as exc:
+            print(f"awrecover: could not remove stale verify dir {d}: {exc}")
+    return removed
+
+
 def verify(store: Path, label: str, *, expect_key: Optional[str] = None,
            object_store: Any = None) -> Dict[str, Any]:
     """Prove a snapshot is RESTORABLE by restoring it to a scratch directory.
@@ -351,13 +383,14 @@ def verify(store: Path, label: str, *, expect_key: Optional[str] = None,
     directory. The only evidence that a backup works is a restore.
     """
     _require_awshare()
+    sweep_stale_verify_dirs()
     snaps = load_index(store)
     if label not in snaps:
         raise RecoverError(f"no snapshot labelled {label!r} in {store}")
     if _is_tree(snaps[label]):
         snap = snaps[label]
         objs = _objects_for(snap, object_store)
-        tmp = Path(tempfile.mkdtemp(prefix=f".awrecover-verify-{label}-"))
+        tmp = Path(tempfile.mkdtemp(prefix=f"{VERIFY_PREFIX}{label}-"))
         try:
             tm = _tree_manifest(store, snap, objs)
             sealres = _check_tree_seal(store, snap, tm, objs, expect_key)
@@ -373,7 +406,7 @@ def verify(store: Path, label: str, *, expect_key: Optional[str] = None,
         raise RecoverError(
             f"snapshot {label!r} is in the index but its manifest is missing at "
             f"{manifest}. The index is a claim; the archive is the backup")
-    tmp = Path(tempfile.mkdtemp(prefix=f".awrecover-verify-{label}-"))
+    tmp = Path(tempfile.mkdtemp(prefix=f"{VERIFY_PREFIX}{label}-"))
     try:
         r = awshare.fetch(manifest, tmp, expect_key=expect_key)
         return {"label": label, "restorable": True, "files": r["files"],
